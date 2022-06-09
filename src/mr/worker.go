@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
@@ -8,6 +9,7 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -24,8 +26,7 @@ func (a ByKey) Len() int           { return len(a) }
 func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
-// use ihash(key) % NReduce to choose the reduce
-// task number for each KeyValue emitted by Map.
+// use ihash(key) % NReduce to choose the reduce; task number for each KeyValue emitted by Map.
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
@@ -33,58 +34,115 @@ func ihash(key string) int {
 }
 
 // main/mrworker.go calls this function.
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
-	fileName, reduces, no := RequestFile()
-	fmt.Println(reduces)
-	content := ReadFileContent(fileName)
+	for {
+		time.Sleep(1 * time.Second)
 
-	intermediate := []KeyValue{}
-	kva := mapf(fileName, string(content))
+		resp := RequestWork()
 
-	intermediate = append(intermediate, kva...)
-	sort.Sort(ByKey(intermediate))
+		switch resp.WorkType {
+		case "map":
+			content := ReadFileContent(resp.FileName)
 
-	reducerInputFiles := make(map[int][]KeyValue)
-	for i := 0; i < reduces; i++ {
-		reducerInputFiles[i] = nil
-	}
+			intermediate := []KeyValue{}
+			kva := mapf(resp.FileName, string(content))
 
-	for _, v := range intermediate {
-		i := ihash(v.Key) % reduces
-		reducerInputFiles[i] = append(reducerInputFiles[i], v)
-	}
+			intermediate = append(intermediate, kva...)
+			sort.Sort(ByKey(intermediate))
 
-	for i, v := range reducerInputFiles {
-		fn := fmt.Sprintf("mr-%v-%v", no, i)
-		ofile, _ := os.Create(fn)
-		for _, kv := range v {
-			fmt.Fprintf(ofile, "%v %v\n", kv.Key, kv.Value)
+			reducerInputFiles := make(map[int][]KeyValue)
+			for i := 0; i < resp.Reduces; i++ {
+				reducerInputFiles[i] = nil
+			}
+
+			for _, v := range intermediate {
+				i := ihash(v.Key) % resp.Reduces
+				reducerInputFiles[i] = append(reducerInputFiles[i], v)
+			}
+
+			interFiles := make(map[int]string)
+			for i, v := range reducerInputFiles {
+				fn := fmt.Sprintf("mr-%v-%v", resp.FileNumber, i)
+				interFiles[i] = fn
+				ofile, _ := os.Create(fn)
+				for _, kv := range v {
+					enc := json.NewEncoder(ofile)
+					enc.Encode(&kv)
+				}
+				ofile.Close()
+			}
+
+			args := WorkDoneRequest{FileName: resp.FileName, InterFiles: interFiles, WorkType: "map"}
+			CompleteFile(args)
+
+		case "reduce":
+			kva := []KeyValue{}
+			//fmt.Printf("Receive reduce work %v\n", resp.Hash)
+			// read the files
+			for _, fileName := range resp.InterFiles {
+				//fmt.Printf("Loading file %v\n", fileName)
+				file, _ := os.Open(fileName)
+				dec := json.NewDecoder(file)
+				for {
+					var kv KeyValue
+					if err := dec.Decode(&kv); err != nil {
+						break
+					}
+					kva = append(kva, kv)
+				}
+			}
+
+			sort.Sort(ByKey(kva))
+
+			//fmt.Printf("Processing hash %v\n", resp.Hash)
+			// run reduce and save the final file
+			oname := fmt.Sprintf("mr-out-%v\n", resp.Hash)
+			ofile, _ := ioutil.TempFile(".", "*") //os.Create(oname)
+
+			i := 0
+			for i < len(kva) {
+				j := i + 1
+				for j < len(kva) && kva[j].Key == kva[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, kva[k].Value)
+				}
+				output := reducef(kva[i].Key, values)
+
+				// this is the correct format for each line of Reduce output.
+				fmt.Fprintf(ofile, "%v %v\n", kva[i].Key, output)
+
+				i = j
+			}
+
+			ofile.Close()
+			os.Rename(ofile.Name(), oname)
+
+			args := WorkDoneRequest{WorkType: "reduce", Hash: resp.Hash}
+			CompleteFile(args)
+
+		case "done":
+			//fmt.Println("All done. Exiting")
+			break
+		default:
+			continue
 		}
-		ofile.Close()
 	}
-
-	CompleteFile(fileName)
 }
 
-func RequestFile() (string, int, int) {
-	args := FileRequest{}
-	resp := FileResponse{}
+func RequestWork() WorkResponse {
+	args := WorkRequest{}
+	resp := WorkResponse{}
 
 	ok := call("Coordinator.RequestFile", &args, &resp)
-	if ok {
-		//fmt.Printf("Received file %v\n", resp.FileName)
-		if resp.FileName == "" {
-			fmt.Printf("No received file %v\n", resp.FileName)
-			return "", resp.Reduces, resp.No
-		}
-		return resp.FileName, resp.Reduces, resp.No
-	} else {
+	if !ok {
 		fmt.Printf("call failed!\n")
 	}
 
-	return resp.FileName, resp.Reduces, resp.No
+	return resp
 }
 
 func ReadFileContent(filename string) string {
@@ -101,46 +159,15 @@ func ReadFileContent(filename string) string {
 	return string(content)
 }
 
-func CompleteFile(fileName string) {
-	args := FileDoneRequest{}
-	args.FileName = fileName
-	resp := FileDoneResponse{}
-
+func CompleteFile(args WorkDoneRequest) {
+	resp := WorkDoneResponse{}
 	ok := call("Coordinator.CompleteFile", &args, &resp)
 	if !ok {
-		fmt.Printf("Complete file %v called failed\n", fileName)
+		fmt.Printf("Complete file %v called failed\n", args.FileName)
 	}
 }
 
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	// the "Coordinator.Example" tells the
-	// receiving server that we'd like to call
-	// the Example() method of struct Coordinator.
-	ok := call("Coordinator.Example", &args, &reply)
-	if ok {
-		// reply.Y should be 100.
-		fmt.Printf("reply.Y %v\n", reply.Y)
-	} else {
-		fmt.Printf("call failed!\n")
-	}
-}
-
-//
-// send an RPC request to the coordinator, wait for the response.
-// usually returns true.
-// returns false if something goes wrong.
-//
+// send an RPC request to the coordinator, wait for the response usually returns true; returns false if something goes wrong.
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := coordinatorSock()

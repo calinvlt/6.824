@@ -1,41 +1,29 @@
 package mr
 
-//
-// RPC definitions.
-//
-// remember to capitalize all names.
-//
-
 import (
 	"os"
 	"strconv"
 )
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
-}
-
-type ExampleReply struct {
-	Y int
-}
-
 // Add your RPC definitions here.
-type FileRequest struct{}
-type FileResponse struct {
-	FileName string
-	Reduces int
-	No int
+type WorkRequest struct{}
+type WorkResponse struct {
+	WorkType   string
+	FileName   string
+	Reduces    int
+	FileNumber int
+	Hash       int
+	InterFiles []string
 }
 
-type FileDoneRequest struct {
-	FileName string
+type WorkDoneRequest struct {
+	WorkType   string
+	FileName   string
+	InterFiles map[int]string
+	Hash       int
 }
-type FileDoneResponse struct{}
+type WorkDoneResponse struct {
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
