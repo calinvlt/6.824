@@ -61,6 +61,7 @@ rm -f mr-*
 
 failed_any=0
 
+#if false; then
 #########################################################
 # first word-count
 
@@ -128,7 +129,6 @@ else
 fi
 
 wait
-exit
 #########################################################
 echo '***' Starting map parallelism test.
 
@@ -158,7 +158,6 @@ else
 fi
 
 wait
-
 
 #########################################################
 echo '***' Starting reduce parallelism test.
@@ -265,7 +264,7 @@ else
   failed_any=1
 fi
 rm -f mr-*
-
+#fi
 #########################################################
 echo '***' Starting crash test.
 

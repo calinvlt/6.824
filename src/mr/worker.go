@@ -9,8 +9,8 @@ import (
 	"net/rpc"
 	"os"
 	"sort"
-	"time"
 	"sync"
+	"time"
 )
 
 // Map functions return a slice of KeyValue.
@@ -38,7 +38,7 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
 	for {
-		time.Sleep(1 * time.Second)
+		time.Sleep(250 * time.Millisecond)
 
 		resp := RequestWork()
 
@@ -78,13 +78,13 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 				ofile.Close()
 			}
 
-			//fmt.Printf("Done map work %v count %v\n", resp.Hash, len(interFiles))
+			fmt.Printf("Done map work %v \n", resp.FileName)
 			args := WorkDoneRequest{FileName: resp.FileName, InterFiles: interFiles, WorkType: "map"}
 			CompleteFile(args)
 
 		case "reduce":
 			kva := []KeyValue{}
-			fmt.Printf("Receive reduce work %v count %v\n", resp.Hash, len(resp.InterFiles))
+			//fmt.Printf("Receive reduce work %v count %v\n", resp.Hash, len(resp.InterFiles))
 			// read the files
 			for _, fileName := range resp.InterFiles {
 				//fmt.Printf("Loading file %v\n", fileName)
@@ -127,11 +127,11 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 			ofile.Close()
 			os.Rename(ofile.Name(), oname)
 
+			fmt.Printf("Done hash work %v \n", resp.Hash)
 			args := WorkDoneRequest{WorkType: "reduce", Hash: resp.Hash}
 			CompleteFile(args)
 
 		case "done":
-			//fmt.Println("All done. Exiting")
 			break
 		default:
 			continue

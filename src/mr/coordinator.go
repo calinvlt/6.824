@@ -33,14 +33,14 @@ func (c *Coordinator) RequestWork(arg *WorkRequest, resp *WorkResponse) error {
 	defer c.Mutex.Unlock()
 
 	for k, v := range c.Files {
-		if !v.Done && !v.IsStarted {
-			oldStatus := c.Files[k]
+		oldStatus := c.Files[k]
+		if (!v.Done && !v.IsStarted) || (!v.Start.IsZero() && int(time.Now().Sub(oldStatus.Start).Seconds()) > 10) {
 			oldStatus.Start = time.Now()
 			oldStatus.IsStarted = true
 			c.Files[k] = oldStatus
 			resp.WorkType = "map"
 			resp.FileName = k
-			resp.Reduces = oldStatus.Reduces
+			resp.Reduces = c.Reduces
 			resp.FileNumber = oldStatus.FileNumber
 			fmt.Printf("Sending to worker file %v\n", k)
 			return nil
@@ -48,8 +48,8 @@ func (c *Coordinator) RequestWork(arg *WorkRequest, resp *WorkResponse) error {
 	}
 
 	for k, v := range c.ReduceFiles {
-		if !v.Done && !v.IsStarted {
-			oldStatus := c.ReduceFiles[k]
+		oldStatus := c.ReduceFiles[k]
+		if !v.Done && !v.IsStarted || (!v.Start.IsZero() && int(time.Now().Sub(oldStatus.Start).Seconds()) > 10) {
 			oldStatus.Start = time.Now()
 			oldStatus.IsStarted = true
 			c.ReduceFiles[k] = oldStatus
@@ -74,7 +74,7 @@ func (c *Coordinator) CompleteWork(arg *WorkDoneRequest, resp *WorkDoneResponse)
 	case "map":
 		for k := range c.Files {
 			if k == arg.FileName {
-				c.Files[k] = Status{Done: true}				
+				c.Files[k] = Status{Done: true}
 				break
 			}
 		}
@@ -91,10 +91,10 @@ func (c *Coordinator) CompleteWork(arg *WorkDoneRequest, resp *WorkDoneResponse)
 			interFiles := make([]string, len(c.Files))
 			for j := 0; j < len(c.Files); j++ {
 				fn := fmt.Sprintf("mr-%v-%v", j, i)
-				interFiles[j] = fn			
+				interFiles[j] = fn
 			}
 			c.ReduceFiles[i] = Status{InterFiles: interFiles}
-		}		
+		}
 	case "reduce":
 		//fmt.Printf("Reduce work done %v\n", arg.Hash)
 		c.ReduceFiles[arg.Hash] = Status{Done: true}
