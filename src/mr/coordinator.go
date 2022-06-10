@@ -13,6 +13,7 @@ import (
 
 type Status struct {
 	Done       bool
+	IsStarted  bool
 	Start      time.Time
 	Reduces    int
 	FileNumber int
@@ -23,17 +24,19 @@ type Coordinator struct {
 	Files       map[string]Status
 	ReduceFiles map[int]Status
 	Mutex       sync.Mutex
+	Reduces     int
 }
 
 // request work
-func (c *Coordinator) RequestFile(arg *WorkRequest, resp *WorkResponse) error {
+func (c *Coordinator) RequestWork(arg *WorkRequest, resp *WorkResponse) error {
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
 
 	for k, v := range c.Files {
-		if !v.Done {
+		if !v.Done && !v.IsStarted {
 			oldStatus := c.Files[k]
 			oldStatus.Start = time.Now()
+			oldStatus.IsStarted = true
 			c.Files[k] = oldStatus
 			resp.WorkType = "map"
 			resp.FileName = k
@@ -45,9 +48,10 @@ func (c *Coordinator) RequestFile(arg *WorkRequest, resp *WorkResponse) error {
 	}
 
 	for k, v := range c.ReduceFiles {
-		if !v.Done {
+		if !v.Done && !v.IsStarted {
 			oldStatus := c.ReduceFiles[k]
 			oldStatus.Start = time.Now()
+			oldStatus.IsStarted = true
 			c.ReduceFiles[k] = oldStatus
 			resp.WorkType = "reduce"
 			resp.Hash = k
@@ -62,7 +66,7 @@ func (c *Coordinator) RequestFile(arg *WorkRequest, resp *WorkResponse) error {
 }
 
 // work complete
-func (c *Coordinator) CompleteFile(arg *WorkDoneRequest, resp *WorkDoneResponse) error {
+func (c *Coordinator) CompleteWork(arg *WorkDoneRequest, resp *WorkDoneResponse) error {
 	c.Mutex.Lock()
 	defer c.Mutex.Unlock()
 
@@ -70,22 +74,27 @@ func (c *Coordinator) CompleteFile(arg *WorkDoneRequest, resp *WorkDoneResponse)
 	case "map":
 		for k := range c.Files {
 			if k == arg.FileName {
-				c.Files[k] = Status{Done: true}
-				//fmt.Printf("Worker completed file %v\n", k)
-
-				for hash, fileName := range arg.InterFiles {
-					//fmt.Printf("Adding intermediate file %v for hash %v\n", fileName, hash)
-					if entry, ok := c.ReduceFiles[hash]; ok {
-						entry.InterFiles = append(entry.InterFiles, fileName)
-						c.ReduceFiles[hash] = entry
-					} else {
-						c.ReduceFiles[hash] = Status{InterFiles: []string{fileName}}
-					}
-				}
-
+				c.Files[k] = Status{Done: true}				
 				break
 			}
 		}
+
+		// if map jobs are not done return
+		for k := range c.Files {
+			if !c.Files[k].Done {
+				return nil
+			}
+		}
+
+		// build reduce jobs
+		for i := 0; i < c.Reduces; i++ {
+			interFiles := make([]string, len(c.Files))
+			for j := 0; j < len(c.Files); j++ {
+				fn := fmt.Sprintf("mr-%v-%v", j, i)
+				interFiles[j] = fn			
+			}
+			c.ReduceFiles[i] = Status{InterFiles: interFiles}
+		}		
 	case "reduce":
 		//fmt.Printf("Reduce work done %v\n", arg.Hash)
 		c.ReduceFiles[arg.Hash] = Status{Done: true}
@@ -137,6 +146,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// initalizae the coordinator map
 	c.Files = make(map[string]Status)
 	c.ReduceFiles = make(map[int]Status)
+	c.Reduces = nReduce
 
 	for i, f := range files {
 		c.Files[f] = Status{Reduces: nReduce, FileNumber: i}

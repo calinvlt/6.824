@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"time"
+	"sync"
 )
 
 // Map functions return a slice of KeyValue.
@@ -40,6 +41,10 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 		time.Sleep(1 * time.Second)
 
 		resp := RequestWork()
+
+		var mx sync.Mutex
+		mx.Lock()
+		mx.Unlock()
 
 		switch resp.WorkType {
 		case "map":
@@ -73,12 +78,13 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 				ofile.Close()
 			}
 
+			//fmt.Printf("Done map work %v count %v\n", resp.Hash, len(interFiles))
 			args := WorkDoneRequest{FileName: resp.FileName, InterFiles: interFiles, WorkType: "map"}
 			CompleteFile(args)
 
 		case "reduce":
 			kva := []KeyValue{}
-			//fmt.Printf("Receive reduce work %v\n", resp.Hash)
+			fmt.Printf("Receive reduce work %v count %v\n", resp.Hash, len(resp.InterFiles))
 			// read the files
 			for _, fileName := range resp.InterFiles {
 				//fmt.Printf("Loading file %v\n", fileName)
@@ -137,7 +143,7 @@ func RequestWork() WorkResponse {
 	args := WorkRequest{}
 	resp := WorkResponse{}
 
-	ok := call("Coordinator.RequestFile", &args, &resp)
+	ok := call("Coordinator.RequestWork", &args, &resp)
 	if !ok {
 		fmt.Printf("call failed!\n")
 	}
@@ -161,7 +167,7 @@ func ReadFileContent(filename string) string {
 
 func CompleteFile(args WorkDoneRequest) {
 	resp := WorkDoneResponse{}
-	ok := call("Coordinator.CompleteFile", &args, &resp)
+	ok := call("Coordinator.CompleteWork", &args, &resp)
 	if !ok {
 		fmt.Printf("Complete file %v called failed\n", args.FileName)
 	}
