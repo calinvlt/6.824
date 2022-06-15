@@ -76,8 +76,31 @@ type Raft struct {
 }
 
 func (rf *Raft) GetState() (int, bool) {
+	//rf.printState("GetState")	
 	return rf.currentTerm, rf.state == "leader"
 }
+func (rf *Raft) SetHeartBeat()  {
+	rf.mu.Lock()
+	rf.lastHeartbeat = time.Now()
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) GetHeartBeat() (time.Time) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.lastHeartbeat
+}
+func (rf *Raft) SetServerState(state string)  {
+	rf.mu.Lock()
+	rf.state = state
+	rf.mu.Unlock()
+}
+func (rf *Raft) GetServerState() (string) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.state
+}
+
 
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
@@ -165,9 +188,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if rf.votedFor == -1 {
 		rf.mu.Lock()
 		rf.votedFor = args.CandidateId
-		rf.currentTerm = args.Term
-		rf.lastHeartbeat = time.Now()
+		rf.currentTerm = args.Term		
 		rf.mu.Unlock()
+		rf.SetHeartBeat()
 
 		reply.VoteGranted = true
 		//rf.printState(fmt.Sprintf("VOTED FOR %v", args.CandidateId))
@@ -186,20 +209,22 @@ func (rf *Raft) ticker() {
 			continue
 		}
 		
-		if time.Since(rf.lastHeartbeat).Milliseconds() > rf.electionTimeout {
-			rf.printState(fmt.Sprintf("%v %v %v", time.Since(rf.lastHeartbeat).Milliseconds(),  rf.electionTimeout, time.Since(rf.lastHeartbeat).Milliseconds() - rf.electionTimeout))
-			rf.mu.Lock()
-			rf.state = "candidate"
-			rf.currentTerm++
-			rf.votedFor = rf.me
-			rf.lastHeartbeat = time.Now()
-			rf.mu.Unlock()
+		
+		if time.Since(rf.GetHeartBeat()).Milliseconds() > rf.electionTimeout {
+			rf.printState(fmt.Sprintf("%v %v %v", time.Since(rf.lastHeartbeat).Milliseconds(), rf.electionTimeout, time.Since(rf.lastHeartbeat).Milliseconds()-rf.electionTimeout))
 			rf.printState("trigger election")
 
-			var wg sync.WaitGroup
-			wg.Add(len(rf.peers)-1)
+			rf.SetServerState("candidate")
+			rf.SetHeartBeat()
+			rf.mu.Lock()			
+			rf.currentTerm++
+			rf.votedFor = rf.me
+			rf.mu.Unlock()			
 
-			numberOfVotes := 1			
+			var wg sync.WaitGroup
+			wg.Add(len(rf.peers) - 1)
+
+			numberOfVotes := 1
 			for i := range rf.peers {
 				if i != rf.me {
 					args := RequestVoteArgs{Term: rf.currentTerm, CandidateId: rf.me}
@@ -211,15 +236,13 @@ func (rf *Raft) ticker() {
 							rf.printState(fmt.Sprintf("VOTED BY: %v", peerId))
 							numberOfVotes++
 						}
-						wg.Done()						
+						wg.Done()
 					}(x)
 				}
 			}
 			wg.Wait()
 			if numberOfVotes >= (len(rf.peers)/2 + 1) {
-				rf.mu.Lock()
-				rf.state = "leader"
-				rf.mu.Unlock()
+				rf.SetServerState("leader")
 				rf.printState(fmt.Sprintf("LEADER elected votes:%v peers:%v", numberOfVotes, len(rf.peers)))
 
 				for j := range rf.peers {
@@ -259,21 +282,20 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	rf.printState("heartbeat")
-
-	if args.Term > rf.currentTerm {		
+	if args.Term > rf.currentTerm {
 		rf.becomeFollower(args.Term)
 		return
 	}
 
 	reply.Success = false
 	if args.Term == rf.currentTerm {
-		if rf.state != "follower" {
+		if rf.GetServerState() != "follower" {
 			rf.becomeFollower(args.Term)
 		}
-		rf.mu.Lock()
-		rf.lastHeartbeat = time.Now()
+		rf.mu.Lock()		
+		rf.votedFor = -1
 		rf.mu.Unlock()
+		rf.SetHeartBeat()
 		reply.Success = true
 	}
 	reply.Term = rf.currentTerm
@@ -282,14 +304,14 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 // leader ticker
 func (rf *Raft) leaderTicker() {
 	for rf.killed() == false {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 
-		if rf.state == "leader" {
-			for i := range rf.peers {				
+		if rf.GetServerState() == "leader" {
+			for i := range rf.peers {
 				if i != rf.me {
 					args := AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me}
 					d := i
-					go func(peerId int) {						
+					go func(peerId int) {
 						reply := AppendEntriesReply{}
 						//rf.printState(fmt.Sprintf("Send heartbeat to: %v", peerId))
 						rf.peers[i].Call("Raft.AppendEntries", &args, &reply)
@@ -309,12 +331,12 @@ func (rf *Raft) printState(msg string) {
 }
 
 func (rf *Raft) becomeFollower(term int) {
-	rf.mu.Lock()
-	rf.state = "follower"
-	rf.currentTerm = term
-	rf.lastHeartbeat = time.Now()
+	rf.mu.Lock()	
+	rf.currentTerm = term	
 	rf.votedFor = -1
 	rf.mu.Unlock()
+	rf.SetServerState("follower")
+	rf.SetHeartBeat()
 	rf.printState("becoming follower")
 }
 
