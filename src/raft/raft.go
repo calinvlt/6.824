@@ -343,7 +343,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 func (rf *Raft) printState(msg string) {
-	fmt.Printf("%v me:%v t:%v vf:%v state:%v msg:%v\n", time.Now().UnixMilli(), rf.me, rf.currentTerm, rf.votedFor, rf.state, msg)
+	fmt.Printf("%v me:%v t:%v vf:%v state:%v msg:%v\n", time.Now().UnixMilli()%100000, rf.me, rf.currentTerm, rf.votedFor, rf.state, msg)
 }
 
 func (rf *Raft) becomeFollower(term int) {
