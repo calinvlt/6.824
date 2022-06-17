@@ -77,7 +77,13 @@ type Raft struct {
 
 func (rf *Raft) GetState() (int, bool) {
 	//rf.printState("GetState")
-	return rf.currentTerm, rf.state == "leader"
+	rf.mu.Lock()
+	ct := rf.currentTerm
+	state := rf.state
+	rf.mu.Unlock()
+
+	//return rf.currentTerm, rf.state == "leader"
+	return ct,state == "leader"
 }
 
 // save Raft's persistent state to stable storage,
@@ -268,9 +274,11 @@ func (rf *Raft) leaderTicker() {
 		
 		//rf.printState(fmt.Sprintf("ticker after sleep:%v", rf.state))
 
-		//rf.mu.Lock()
-		if rf.state != "leader" {
-			//rf.mu.Unlock()
+		rf.mu.Lock()
+		state := rf.state
+		rf.mu.Unlock()
+
+		if state != "leader" {		
 			//rf.printState(fmt.Sprintf("ticker not leader:%v", rf.state))
 			return			
 		}
@@ -283,11 +291,15 @@ func (rf *Raft) leaderTicker() {
 
 func (rf *Raft) sednHeartBeats() {
 
+	rf.mu.Lock()
+	currentTerm := rf.currentTerm
+	rf.mu.Unlock()
+
 	var wg sync.WaitGroup
 	wg.Add(len(rf.peers)-1)
 
 	for i := range rf.peers {
-		args := AppendEntriesArgs{Term: rf.currentTerm, LeaderId: rf.me}		
+		args := AppendEntriesArgs{Term: currentTerm, LeaderId: rf.me}		
 		if i == rf.me { continue }
 		go func(peerId int) {
 			reply := AppendEntriesReply{}			
@@ -296,7 +308,7 @@ func (rf *Raft) sednHeartBeats() {
 				wg.Done()				
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
-				if reply.Term > rf.currentTerm {
+				if reply.Term > currentTerm {
 					rf.becomeFollower(reply.Term)					
 				}
 			}
